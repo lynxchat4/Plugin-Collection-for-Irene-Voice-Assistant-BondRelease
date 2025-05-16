@@ -25,8 +25,8 @@ def start(core: VACore):
         },
 
         'commands': {
-            'включи': hassio_call('switch_on'),
-            'выключи': hassio_call('switch_off'),
+            'включи|включить|включил|включен': hassio_call('switch_on'),        # добалены варианты слов для улучшения распознавания команды
+            'выключи|выключить|выключил|выключен': hassio_call('switch_off'),   # добалены варианты слов для улучшения распознавания команды
             'хочу|сделай|я буду': hassio_call('script'),
             'перезагрузи устройства|загрузи устройства|перезагрузи хоум|загрузи хоум': hassio_call('reload'),
             'какая': hassio_call('sensor'),
@@ -52,7 +52,7 @@ def hassio_call(method):
     return decorator
 
 class _HomeAssistant:
-    entities: TypedDict('EntitiesNameMap', {'switch': dict[str, str], 'sensor': dict[str, str]})
+    entities: TypedDict('EntitiesNameMap', {'switch': dict[str, str], 'light': dict[str, str], 'sensor': dict[str, str]})   # добалена поддержка светильников
     scripts: dict[str, TypedDict('ScriptDomain', {'name': str, 'description': str, })]
 
     def __new__(cls, *args, **kwargs):
@@ -75,10 +75,11 @@ class _HomeAssistant:
         self.totem = options['totem']
         self.va_core = core
 
-        # используется библиотека pymorphy2 она нормализует слова
+        # используется библиотека pymorphy3 она нормализует слова
+        # перевел на новую версию библиотеки, старая не поддерживается автором и с ней была проблема
         try:
-            import pymorphy2
-            self.morph = pymorphy2.MorphAnalyzer()
+            import pymorphy3
+            self.morph = pymorphy3.MorphAnalyzer()
         except ImportError:
             self.morph = None
 
@@ -96,12 +97,34 @@ class _HomeAssistant:
             import traceback
             traceback.print_exc()
 
+    # Добравлен метод для поиска нормализованной фразы в списке имен загруженных объектов, содержащих подсписки, разделенные символом "|"
+    # пример ищем фразу "тусклый ночник" в нормализованном подсписке "слабый ночник|ночник слабый|тусклый ночник|ночник тусклый"
+    # возвращает полное имя объекта и индекс расположения фразы внутри подсписка
+    def get_full_name(self, phrase, structure):
+        print(f'### get_full_name >>> {phrase} in {structure}')
+        index = -1
+        full_name = ""
+
+        for item in structure:
+            name_item = str(item)
+            parts_name = name_item.split("|")
+            if ('|' not in name_item and name_item == phrase ) or ('|' in name_item and phrase in parts_name):
+                full_name = name_item
+                if '|' in name_item:
+                    index = parts_name.index(phrase)
+                break
+
+        return full_name, index
+
     def call_script(self, phrase):
         no_script = True
         phrase += self.totem
         phrase = self.prepare_phrase(phrase)
         for script in self.scripts:
-            if str(self.scripts[script]['name']) == phrase:  # ищем скрипт с подходящим именем
+            # Добавлена поддержка подсписков для скриптов
+            name_script = str(self.scripts[script]['name'])
+            parts_name_script = name_script.split("|")
+            if ('|' not in name_script and name_script == phrase ) or ('|' in name_script and phrase in parts_name_script):
                 self.request(f'services/script/{script}', 'POST')
                 script_desc = str(
                     self.scripts[script]['description'])  # бонус: ищем что ответить пользователю из описания скрипта
@@ -113,47 +136,84 @@ class _HomeAssistant:
                 break
         if no_script:
             self.say_if_va('Нет такого сценария')
+            print(f"Нет такого сценария >{phrase}< {self.scripts}")
 
     def call_switch_on(self, phrase):
         phrase += self.totem
         phrase = self.prepare_phrase(phrase)
-        if phrase not in self.entities['switch']:
-            self.say_if_va('Нет такого устройства')
-        if self.request('services/switch/turn_on', 'POST', json={
-            'entity_id': self.entities['switch'][phrase]
-        }) is not None:
-            self.default_reply()
+        # Добавлена поддержка подсписков для выключателей и светильников
+        full_name_switch, index_phrase = self.get_full_name(phrase, self.entities['switch'])
+        full_name_light, index_phrase = self.get_full_name(phrase, self.entities['light'])
+        if full_name_switch == "" and full_name_light == "":
+            self.say_if_va("Нет такого устройства")
+            print(f"Нет такого устройства >{phrase}< среди {self.entities['switch']} и {self.entities['light']}")
+        else:
+            if full_name_switch != "": 
+                if self.request('services/switch/turn_on', 'POST', json={
+                    'entity_id': self.entities['switch'][full_name_switch]
+                }) is not None:
+                    self.default_reply()
+            # Добавлена поддержка светильников
+            if full_name_light != "": 
+                if self.request('services/light/turn_on', 'POST', json={
+                    'entity_id': self.entities['light'][full_name_light]
+                }) is not None:
+                    self.default_reply()
 
     def call_switch_off(self, phrase):
         phrase += self.totem
         phrase = self.prepare_phrase(phrase)
-        if phrase not in self.entities['switch']:
-            self.say_if_va('Нет такого устройства')
-        elif self.request('services/switch/turn_off', 'POST', json={
-            'entity_id': self.entities['switch'][phrase]
-        }) is not None:
-            self.default_reply()
+        # Добавлена поддержка подсписков для выключателей и светильников
+        full_name_switch, index_phrase = self.get_full_name(phrase, self.entities['switch'])
+        full_name_light, index_phrase = self.get_full_name(phrase, self.entities['light'])
+        if full_name_switch == "" and full_name_light == "":
+            self.say_if_va("Нет такого устройства")
+            print(f"Нет такого устройства >{phrase}< среди {self.entities['switch']} и {self.entities['light']}")
+        else:
+            if full_name_switch != "": 
+                if self.request('services/switch/turn_off', 'POST', json={
+                    'entity_id': self.entities['switch'][full_name_switch]
+                }) is not None:
+                    self.default_reply()
+            # Добавлена поддержка светильников
+            if full_name_light != "": 
+                if self.request('services/light/turn_off', 'POST', json={
+                    'entity_id': self.entities['light'][full_name_light]
+                }) is not None:
+                    self.default_reply()
 
     def call_sensor(self, phrase):
         phrase += self.totem
         phrase = self.prepare_phrase(phrase)
-        if phrase not in self.entities['sensor']:
-            self.say_if_va('Нет такого устройства')
-            print("Нет такого устройства")
+        # Добавлена поддержка подсписков для сенсоров
+        full_name_sensor, index_phrase = self.get_full_name(phrase, self.entities['sensor'])
+        if full_name_sensor == "":
+            self.say_if_va('Нет такого сенсора')
+            print(f"Нет такого сенсора >{phrase}< среди {self.entities['sensor']}")
             return None
-        state = self.request(f'states/{self.entities["sensor"][phrase]}')
+        state = self.request(f'states/{self.entities["sensor"][full_name_sensor]}')
         if not state:
             self.say_if_va('Не удалось получить статус устройства')
         state_type = state.get('attributes', {}).get('device_class')
         val = int(float(state["state"]))
         if state_type in ('temperature', 'humidity'):
             sensor_name = state.get("attributes").get("friendly_name", phrase)
-            sensor_name = re.sub(r'[^а-яА-ЯёЁ\s]', '', sensor_name)
+            sensor_name = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', sensor_name)           # добавлена символ "|" для поддержки подсписков
+            # для сенсора содержащего подсписок брем, по полученному ранее индексу,
+            # не нормализованную часть название, для корректного озвучивания команды
+            if '|' in sensor_name:
+                parts = sensor_name.split("|")
+                sensor_name = parts[index_phrase]
             self.say_if_va(f'{sensor_name} сейчас {self.num2text(val)}'
                            f' {self.unit_of_measurement(state.get("attributes", {}).get("unit_of_measurement"), val)}')
         elif state_type == 'battery':
             sensor_name = state.get("attributes").get("friendly_name", phrase)
-            sensor_name = re.sub(r'[^а-яА-ЯёЁ\s]', '', sensor_name)
+            sensor_name = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', sensor_name)           # добавлена символ "|" для поддержки подсписков
+            # для сенсора содержащего подсписок брем, по полученному ранее индексу,
+            # не нормализованную часть название, для корректного озвучивания команды
+            if '|' in sensor_name:
+                parts = sensor_name.split("|")
+                sensor_name = parts[index_phrase]
             self.say_if_va(
                 f'заряд {sensor_name} сейчас {self.num2text(val)}'
                 f' {self.unit_of_measurement(state.get("attributes", {}).get("unit_of_measurement"), val)}')
@@ -191,12 +251,14 @@ class _HomeAssistant:
                 break
         self.entities = {
             'switch': {},
+            'light': {},           # добавлена поддержка светильников
             'sensor': {},
         }
         # загружаем states
         states = self.request('states')
         for state in states:
-            for entity_type in ['switch', 'sensor']:
+            # добавлена поддержка светильников
+            for entity_type in ['switch', 'light', 'sensor']:
                 if state['entity_id'].startswith(f'{entity_type}.'):
                     if not state.get('attributes', {}).get('friendly_name'):
                         # устройства без имени не добавляем
@@ -223,6 +285,12 @@ class _HomeAssistant:
             for name, id in self.entities["switch"].items():
                 print(f"{name}")
         print('')
+        # добавлена поддержка светильников
+        print('------Список загруженных светильников--------')
+        if self.entities["light"]:
+            for name, id in self.entities["light"].items():
+                print(f"{name}")
+        print('')
         print('---------------------------------------------')
 
     def default_reply(self):
@@ -240,14 +308,23 @@ class _HomeAssistant:
             #изменить, если захотите включить  mystem
             #if self.mystem:
             if self.morph:
-                phrase = re.sub(r'[^а-яА-ЯёЁ\s]', '', phrase)
-                phrase = ' '.join(
-                    self.morph.parse(word.lower())[0].normal_form for word in re.split(r'\W+', phrase) if word.strip())
-                # изменить, если захотите включить  mystem
-                #phrase = ' '.join(lem.strip().lower() for lem in self.mystem.lemmatize(phrase) if lem.strip())
+                phrase = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', phrase)     # добавлена символ "|" для поддержки подсписков
+                if '|' not in phrase:
+                    phrase = ' '.join(
+                        self.morph.parse(word.lower())[0].normal_form for word in re.split(r'\W+', phrase) if word.strip())
+                    # изменить, если захотите включить  mystem
+                    #phrase = ' '.join(lem.strip().lower() for lem in self.mystem.lemmatize(phrase) if lem.strip())
+                else:
+                    # если объект содержит подсписок, то нормализуем по частям
+                    parts = phrase.split('|')
+                    processed_parts = []
+                    for part in parts:
+                        processed_part = ' '.join(self.morph.parse(word.lower())[0].normal_form for word in re.split(r'\W+', part) if word.strip())
+                        processed_parts.append(processed_part)
+                    phrase = '|'.join(processed_parts)
                 return phrase
             else:
-                phrase = re.sub(r'[^а-яА-ЯёЁ\s]', '', phrase)
+                phrase = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', phrase)     # добавлена символ "|" для поддержки подсписков
                 phrase = phrase.strip().lower()
                 return phrase
 
