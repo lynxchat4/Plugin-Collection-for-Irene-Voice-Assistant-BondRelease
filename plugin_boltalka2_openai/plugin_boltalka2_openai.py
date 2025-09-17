@@ -8,16 +8,19 @@ import os
 import openai
 import requests
 
-proxy = 'http://127.0.0.1:10809'
+# Глобальная переменная для управления сессией
+active_session = False
 
-os.environ['http_proxy'] = proxy 
-os.environ['HTTP_PROXY'] = proxy
-os.environ['https_proxy'] = proxy
-os.environ['HTTPS_PROXY'] = proxy
+#proxy = 'http://127.0.0.1:10809'
+
+#os.environ['http_proxy'] = proxy 
+#os.environ['HTTP_PROXY'] = proxy
+#os.environ['https_proxy'] = proxy
+#os.environ['HTTPS_PROXY'] = proxy
 
 # ---------- from https://github.com/stancsz/chatgpt ----------
 class ChatApp:
-    def __init__(self, model="gpt-4o-mini-2024-07-18", load_file='', system=''):
+    def __init__(self, model="gpt-4.1-mini", load_file='', system=''):
         # Setting the API key to use the OpenAI API
         self.model = model
         self.messages = []
@@ -37,9 +40,9 @@ class ChatApp:
         response = openai.ChatCompletion.create(
             model=self.model,
             messages=self.messages,
-            temperature=0.8,
-            n=1,
-            max_tokens=300,
+#            temperature=0.8,
+#            n=1,
+#            max_tokens=300,
         )
         self.messages.append({"role": "assistant", "content": response["choices"][0]["message"].content})
         return response["choices"][0]["message"]
@@ -96,7 +99,8 @@ def start_with_options(core:VACore, manifest:dict):
     pass
 
 def run_start(core:VACore, phrase:str):
-
+    global active_session
+    
     options = core.plugin_options(modname)
 
     if options["apiKey"] == "" and options["apiBaseUrl"] == "":
@@ -108,28 +112,49 @@ def run_start(core:VACore, phrase:str):
         openai.api_base = options["apiBaseUrl"]
 
     core.chatapp = ChatApp(system=options["system"]) # создаем новый чат
+    
+    # Начинаем новую сессию
+    active_session = True
+    
     if phrase == "":
-        core.play_voice_assistant_speech("Да, давай!")
-        core.context_set(boltalka, 20)
+        core.play_voice_assistant_speech("О чем ты хочешь поговорить?")
+        core.context_set(boltalka, 60)
     else:
         boltalka(core,phrase)
 
+def handle_exit_command(core:VACore, phrase:str):
+    global active_session
+    exit_commands = ["отмена", "пока", "закончили", "закончим", "хватит", "стоп"]
+    
+    if any(cmd in phrase.lower() for cmd in exit_commands):
+        active_session = False
+        core.say("До св+язи!")
+        core.context_set(boltalka, 1)
+        return True
+    return False
+
+
 def boltalka(core:VACore, phrase:str):
-    if phrase == "отмена" or phrase == "пока":
-        core.play_voice_assistant_speech("Пока!")
+    global active_session
+
+    # Проверяем команды выхода ПЕРВЫМИ
+    if handle_exit_command(core, phrase):
+        return
+    
+    # Если сессия не активна (после команды выхода), не обрабатываем запрос
+    if not active_session:
         return
 
     try:
         response = core.chatapp.chat(phrase) #generate_response(phrase)
         print(response)
-        #decoded_value = response.encode('utf-8')
-        #print(decoded_value)
         core.say(response["content"])
-        core.context_set(boltalka, 20)
+        
+        # Устанавливаем контекст только если сессия еще активна
+        if active_session:
+            core.context_set(boltalka, 60)
 
     except:
         import traceback
         traceback.print_exc()
         core.play_voice_assistant_speech("Проблемы с доступом к апи. Посмотрите логи")
-
-        return
