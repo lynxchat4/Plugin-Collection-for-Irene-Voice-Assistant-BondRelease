@@ -34,7 +34,7 @@ class _TextNormalizerTTS(FileWritingTTS):
             return input_string.translate(translation_table)
 
         # Замена символов текстом
-        if bool(re.search(r'["-+\-/<->@{-}№]', text)):
+        if bool(re.search(r'()+-#$%&*/<=>@~№×÷', text)):
             # Словарь замены символов
             symbol_dict = {
                 '!': '!', '"': ' двойная кавычка ', '#': ' хэштег ', '$': ' долларов ', '%': ' процентов',
