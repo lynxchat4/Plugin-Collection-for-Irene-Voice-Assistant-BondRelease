@@ -62,21 +62,22 @@ class _TextNormalizerTTS(FileWritingTTS):
                 _logger.debug(f'Текст после замены символов: {text}')
 
             # Удаляем все остальные символы
-            text = re.sub(f'[^{symbols_to_change}{symbols_to_keep}A-Za-zЁА-Яа-яё ]', '', text)
+            text = re.sub(f'[^{symbols_to_change}{symbols_to_keep}A-Za-zЁА-Яа-яё\d ]', '', text)
             _logger.debug(f'Текст после удаления символов: {text}')
 
             text = re.sub(r'[\s]+', ' ', text)  # убрать лишние пробелы
 
-        # Замена чисел словами
-        if bool(re.search(r'[0-9]', text)):
-            # Простая замена чисел (можно улучшить при необходимости)
-            number_replacements = {
-                '0': 'ноль ', '1': 'один ', '2': 'два ', '3': 'три ', '4': 'четыре ',
-                '5': 'пять ', '6': 'шесть ', '7': 'семь ', '8': 'восемь ', '9': 'девять '
-            }
-            for num, word in number_replacements.items():
-                text = text.replace(num, word)
-            _logger.debug(f'Текст после замены чисел: {text}')
+#	Замена чисел словами уже лучше реализована в последующей обработке
+#        # Замена чисел словами
+#        if bool(re.search(r'[0-9]', text)):
+#            # Простая замена чисел (можно улучшить при необходимости)
+#            number_replacements = {
+#                '0': 'ноль ', '1': 'один ', '2': 'два ', '3': 'три ', '4': 'четыре ',
+#                '5': 'пять ', '6': 'шесть ', '7': 'семь ', '8': 'восемь ', '9': 'девять '
+#            }
+#            for num, word in number_replacements.items():
+#                text = text.replace(num, word)
+#            _logger.debug(f'Текст после замены чисел: {text}')
 
         # Замена латиницы на русскую транскрипцию
         if bool(re.search('[a-zA-Z]', text)):
