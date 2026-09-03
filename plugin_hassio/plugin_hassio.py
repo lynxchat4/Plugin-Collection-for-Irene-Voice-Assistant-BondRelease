@@ -12,7 +12,7 @@ logger = logging.getLogger(modname)
 def start(core: VACore):
     manifest = {
         'name': 'Плагин для Home Assistant',
-        'version': '0.2',
+        'version': '0.3',
         'require_online': True,
 
         'default_options': {
@@ -25,8 +25,8 @@ def start(core: VACore):
         },
 
         'commands': {
-            'включи|включить|включил|включен': hassio_call('switch_on'),        # добалены варианты слов для улучшения распознавания команды
-            'выключи|выключить|выключил|выключен': hassio_call('switch_off'),   # добалены варианты слов для улучшения распознавания команды
+            'включи|включить|включил|включен': hassio_call('switch_on'),
+            'выключи|выключить|выключил|выключен': hassio_call('switch_off'),
             'хочу|сделай|я буду': hassio_call('script'),
             'перезагрузи устройства|загрузи устройства|перезагрузи хоум|загрузи хоум': hassio_call('reload'),
             'какая': hassio_call('sensor'),
@@ -52,7 +52,7 @@ def hassio_call(method):
     return decorator
 
 class _HomeAssistant:
-    entities: TypedDict('EntitiesNameMap', {'switch': dict[str, str], 'light': dict[str, str], 'sensor': dict[str, str]})   # добалена поддержка светильников
+    entities: TypedDict('EntitiesNameMap', {'switch': dict[str, str], 'light': dict[str, str], 'sensor': dict[str, str]})
     scripts: dict[str, TypedDict('ScriptDomain', {'name': str, 'description': str, })]
 
     def __new__(cls, *args, **kwargs):
@@ -76,7 +76,6 @@ class _HomeAssistant:
         self.va_core = core
 
         # используется библиотека pymorphy3 она нормализует слова
-        # перевел на новую версию библиотеки, старая не поддерживается автором и с ней была проблема
         try:
             import pymorphy3
             self.morph = pymorphy3.MorphAnalyzer()
@@ -97,9 +96,6 @@ class _HomeAssistant:
             import traceback
             traceback.print_exc()
 
-    # Добравлен метод для поиска нормализованной фразы в списке имен загруженных объектов, содержащих подсписки, разделенные символом "|"
-    # пример ищем фразу "тусклый ночник" в нормализованном подсписке "слабый ночник|ночник слабый|тусклый ночник|ночник тусклый"
-    # возвращает полное имя объекта и индекс расположения фразы внутри подсписка
     def get_full_name(self, phrase, structure):
         index = -1
         full_name = ""
@@ -115,21 +111,32 @@ class _HomeAssistant:
 
         return full_name, index
 
+    # Поиск скрипта содержащего ключевую фразу 'включи|включить|...' либо 'выключи|выключить|...'
+    def get_script(self, phrase):
+        for script in self.scripts:
+            name_script = str(self.scripts[script].get('name') or self.scripts[script].get('alias') or '' )
+            parts_name_script = name_script.split('|')
+
+            if phrase in parts_name_script:
+                return script
+
+        return None
+
     def call_script(self, phrase):
         no_script = True
         phrase += self.totem
         phrase = self.prepare_phrase(phrase)
         for script in self.scripts:
-            # Добавлена поддержка подсписков для скриптов
-            name_script = str(self.scripts[script]['name'])
+            # Добавлена поддержка alias для скриптов
+            name_script = str(self.scripts[script].get('name') or self.scripts[script].get('alias') or '')
             parts_name_script = name_script.split("|")
             if ('|' not in name_script and name_script == phrase ) or ('|' in name_script and phrase in parts_name_script):
                 self.request(f'services/script/{script}', 'POST')
                 script_desc = str(
-                    self.scripts[script]['description'])  # бонус: ищем что ответить пользователю из описания скрипта
-                if 'ttsreply(' in script_desc and ')' in script_desc.split('ttsreply(')[1]:  # обходимся без re :^)
+                    self.scripts[script]['description'])
+                if 'ttsreply(' in script_desc and ')' in script_desc.split('ttsreply(')[1]:
                     self.say_if_va(script_desc.split('ttsreply(')[1].split(')')[0])
-                else:  # если в описании ответа нет, выбираем случайный ответ по умолчанию
+                else:
                     self.default_reply()
                 no_script = False
                 break
@@ -140,51 +147,100 @@ class _HomeAssistant:
     def call_switch_on(self, phrase):
         phrase += self.totem
         phrase = self.prepare_phrase(phrase)
-        # Добавлена поддержка подсписков для выключателей и светильников
-        full_name_switch, index_phrase = self.get_full_name(phrase, self.entities['switch'])
-        full_name_light, index_phrase = self.get_full_name(phrase, self.entities['light'])
-        if full_name_switch == "" and full_name_light == "":
-            self.say_if_va("Нет такого устройства")
-            print(f"Нет такого устройства >{phrase}< среди {self.entities['switch']} и {self.entities['light']}")
-        else:
-            if full_name_switch != "": 
-                if self.request('services/switch/turn_on', 'POST', json={
-                    'entity_id': self.entities['switch'][full_name_switch]
-                }) is not None:
-                    self.default_reply()
-            # Добавлена поддержка светильников
-            if full_name_light != "": 
-                if self.request('services/light/turn_on', 'POST', json={
-                    'entity_id': self.entities['light'][full_name_light]
-                }) is not None:
-                    self.default_reply()
+
+        # Сначала ищем устройство
+        full_name_switch, _ = self.get_full_name(phrase, self.entities['switch'])
+        full_name_light, _ = self.get_full_name(phrase, self.entities['light'])
+
+        if full_name_switch:
+            if self.request('services/switch/turn_on', 'POST', json={
+                'entity_id': self.entities['switch'][full_name_switch]
+            }) is not None:
+                self.default_reply()
+            return
+
+        if full_name_light:
+            if self.request('services/light/turn_on', 'POST', json={
+                'entity_id': self.entities['light'][full_name_light]
+            }) is not None:
+                self.default_reply()
+            return
+
+        # Устройство не найдено.
+        # Ищем скрипт с полной командой.
+        script_phrase = self.prepare_phrase(f'включи {phrase}{self.totem}')
+
+        script = self.get_script(script_phrase)
+
+        if script:
+            self.request(f'services/script/{script}', 'POST')
+
+            script_desc = str(
+                self.scripts[script].get('description', '')
+            )
+
+            if 'ttsreply(' in script_desc and ')' in script_desc.split('ttsreply(')[1]:
+                self.say_if_va(script_desc.split('ttsreply(')[1].split(')')[0])
+            else:
+                self.default_reply()
+
+            return
+
+        self.say_if_va('Нет такого устройства или сценария')
+        print(
+            f'Не найдено устройство или сценарий: '
+            f'устройство >{phrase}<, скрипт >{script_phrase}<'
+        )
 
     def call_switch_off(self, phrase):
         phrase += self.totem
         phrase = self.prepare_phrase(phrase)
-        # Добавлена поддержка подсписков для выключателей и светильников
-        full_name_switch, index_phrase = self.get_full_name(phrase, self.entities['switch'])
-        full_name_light, index_phrase = self.get_full_name(phrase, self.entities['light'])
-        if full_name_switch == "" and full_name_light == "":
-            self.say_if_va("Нет такого устройства")
-            print(f"Нет такого устройства >{phrase}< среди {self.entities['switch']} и {self.entities['light']}")
-        else:
-            if full_name_switch != "": 
-                if self.request('services/switch/turn_off', 'POST', json={
-                    'entity_id': self.entities['switch'][full_name_switch]
-                }) is not None:
-                    self.default_reply()
-            # Добавлена поддержка светильников
-            if full_name_light != "": 
-                if self.request('services/light/turn_off', 'POST', json={
-                    'entity_id': self.entities['light'][full_name_light]
-                }) is not None:
-                    self.default_reply()
+
+        # Сначала ищем устройство
+        full_name_switch, _ = self.get_full_name(phrase, self.entities['switch'])
+        full_name_light, _ = self.get_full_name(phrase, self.entities['light'])
+
+        if full_name_switch:
+            if self.request('services/switch/turn_off', 'POST', json={
+                'entity_id': self.entities['switch'][full_name_switch]
+            }) is not None:
+                self.default_reply()
+            return
+
+        if full_name_light:
+            if self.request('services/light/turn_off', 'POST', json={
+                'entity_id': self.entities['light'][full_name_light]
+            }) is not None:
+                self.default_reply()
+            return
+
+        # Устройство не найдено.
+        # Ищем скрипт с полной командой.
+        script_phrase = self.prepare_phrase(f'выключи {phrase}{self.totem}')
+
+        script = self.get_script(script_phrase)
+
+        if script:
+            self.request(f'services/script/{script}', 'POST')
+
+            script_desc = str(self.scripts[script].get('description', ''))
+
+            if 'ttsreply(' in script_desc and ')' in script_desc.split('ttsreply(')[1]:
+                self.say_if_va(script_desc.split('ttsreply(')[1].split(')')[0])
+            else:
+                self.default_reply()
+
+            return
+
+        self.say_if_va('Нет такого устройства или сценария')
+        print(
+            f'Не найдено устройство или сценарий: '
+            f'устройство >{phrase}<, скрипт >{script_phrase}<'
+        )
 
     def call_sensor(self, phrase):
         phrase += self.totem
         phrase = self.prepare_phrase(phrase)
-        # Добавлена поддержка подсписков для сенсоров
         full_name_sensor, index_phrase = self.get_full_name(phrase, self.entities['sensor'])
         if full_name_sensor == "":
             self.say_if_va('Нет такого сенсора')
@@ -197,9 +253,7 @@ class _HomeAssistant:
         val = int(float(state["state"]))
         if state_type in ('temperature', 'humidity'):
             sensor_name = state.get("attributes").get("friendly_name", phrase)
-            sensor_name = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', sensor_name)           # добавлена символ "|" для поддержки подсписков
-            # для сенсора содержащего подсписок брем, по полученному ранее индексу,
-            # не нормализованную часть название, для корректного озвучивания команды
+            sensor_name = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', sensor_name)
             if '|' in sensor_name:
                 parts = sensor_name.split("|")
                 sensor_name = parts[index_phrase]
@@ -207,9 +261,7 @@ class _HomeAssistant:
                            f' {self.unit_of_measurement(state.get("attributes", {}).get("unit_of_measurement"), val)}')
         elif state_type == 'battery':
             sensor_name = state.get("attributes").get("friendly_name", phrase)
-            sensor_name = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', sensor_name)           # добавлена символ "|" для поддержки подсписков
-            # для сенсора содержащего подсписок брем, по полученному ранее индексу,
-            # не нормализованную часть название, для корректного озвучивания команды
+            sensor_name = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', sensor_name)
             if '|' in sensor_name:
                 parts = sensor_name.split("|")
                 sensor_name = parts[index_phrase]
@@ -251,13 +303,12 @@ class _HomeAssistant:
                 break
         self.entities = {
             'switch': {},
-            'light': {},           # добавлена поддержка светильников
+            'light': {},
             'sensor': {},
         }
         # загружаем states
         states = self.request('states')
         for state in states:
-            # добавлена поддержка светильников
             for entity_type in ['switch', 'light', 'sensor']:
                 if state['entity_id'].startswith(f'{entity_type}.'):
                     if not state.get('attributes', {}).get('friendly_name'):
@@ -285,7 +336,6 @@ class _HomeAssistant:
             for name, id in self.entities["switch"].items():
                 print(f"{name}")
         print('')
-        # добавлена поддержка светильников
         print('------Список загруженных светильников--------')
         if self.entities["light"]:
             for name, id in self.entities["light"].items():
@@ -308,7 +358,7 @@ class _HomeAssistant:
             #изменить, если захотите включить  mystem
             #if self.mystem:
             if self.morph:
-                phrase = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', phrase)     # добавлена символ "|" для поддержки подсписков
+                phrase = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', phrase)
                 if '|' not in phrase:
                     phrase = ' '.join(
                         self.morph.parse(word.lower())[0].normal_form for word in re.split(r'\W+', phrase) if word.strip())
@@ -324,7 +374,7 @@ class _HomeAssistant:
                     phrase = '|'.join(processed_parts)
                 return phrase
             else:
-                phrase = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', phrase)     # добавлена символ "|" для поддержки подсписков
+                phrase = re.sub(r'[^а-яА-ЯёЁ\s\|]', '', phrase)
                 phrase = phrase.strip().lower()
                 return phrase
 
